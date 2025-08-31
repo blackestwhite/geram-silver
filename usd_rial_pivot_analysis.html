@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USD/IRR Weekly Pivot Points Analysis</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #131722;
+            font-family: Arial, sans-serif;
+            color: #F8F9FA;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 18px;
+        }
+        .error {
+            color: #E74C3C;
+            text-align: center;
+            padding: 50px;
+            font-size: 16px;
+        }
+        .refresh-btn {
+            background-color: #3498DB;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 20px auto;
+            display: block;
+        }
+        .refresh-btn:hover {
+            background-color: #2980B9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="refresh-btn" onclick="loadData()">Refresh Data</button>
+        <div id="loading" class="loading">Loading data...</div>
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="chart"></div>
+    </div>
+
+    <script>
+        // API endpoint
+        const USD_IRR_ENDPOINT = "https://api.tgju.org/v1/market/indicator/summary-table-data/price_dollar_rl";
+        
+        // Color palette
+        const colors = {
+            price: '#5BCEFA',
+            pivot: '#FFD700',
+            resistance: '#00FF88',
+            support: '#FF6B6B',
+            background: '#131722',
+            grid: '#1c2030',
+            text: '#F8F9FA'
+        };
+
+        // Utility functions
+        function parseDate(dateStr) {
+            return new Date(dateStr);
+        }
+
+        function parseNumber(str) {
+            return parseFloat(str.replace(/,/g, ''));
+        }
+
+        function getThreeMonthsAgo() {
+            const now = new Date();
+            now.setMonth(now.getMonth() - 3);
+            return now;
+        }
+
+        function getWeekStart(date) {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1) - 1; // Saturday as first day
+            return new Date(d.setDate(diff));
+        }
+
+        function getWeekEnd(date) {
+            const weekStart = getWeekStart(date);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+            return weekEnd;
+        }
+
+        function isCurrentWeekComplete() {
+            const today = new Date();
+            return today.getDay() === 5; // Friday
+        }
+
+        // Fetch data from API
+        async function fetchData(endpoint) {
+            try {
+                const response = await fetch(endpoint);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data.data;
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                throw error;
+            }
+        }
+
+        // Process raw data
+        function processData(rawData) {
+            const threeMonthsAgo = getThreeMonthsAgo();
+            return rawData.map(row => ({
+                open: parseNumber(row[0]),
+                low: parseNumber(row[1]),
+                high: parseNumber(row[2]),
+                close: parseNumber(row[3]),
+                change: parseNumber(row[4]),
+                changePercentage: parseNumber(row[5]),
+                date: parseDate(row[6]),
+                lastUpdate: row[7]
+            })).filter(row => row.date >= threeMonthsAgo).sort((a, b) => a.date - b.date);
+        }
+
+        // Calculate weekly pivot points
+        function calculateWeeklyPivots(data) {
+            const weeklyData = new Map();
+            
+            // Group data by week (Saturday to Friday)
+            data.forEach(item => {
+                const weekStart = getWeekStart(item.date);
+                const weekKey = weekStart.toISOString().split('T')[0];
+                
+                if (!weeklyData.has(weekKey)) {
+                    weeklyData.set(weekKey, {
+                        weekStart: weekStart,
+                        weekEnd: getWeekEnd(item.date),
+                        high: item.high,
+                        low: item.low,
+                        close: item.close,
+                        data: []
+                    });
+                } else {
+                    const week = weeklyData.get(weekKey);
+                    week.high = Math.max(week.high, item.high);
+                    week.low = Math.min(week.low, item.low);
+                    week.close = item.close; // Last close of the week
+                }
+                weeklyData.get(weekKey).data.push(item);
+            });
+
+            // Convert to array and remove incomplete current week if necessary
+            let weeks = Array.from(weeklyData.values()).sort((a, b) => a.weekStart - b.weekStart);
+            
+            if (!isCurrentWeekComplete() && weeks.length > 0) {
+                const lastWeek = weeks[weeks.length - 1];
+                const now = new Date();
+                if (lastWeek.weekEnd > now) {
+                    weeks = weeks.slice(0, -1);
+                }
+            }
+
+            // Calculate pivot points for each week
+            return weeks.map(week => {
+                const pivot = (week.high + week.low + week.close) / 3;
+                return {
+                    ...week,
+                    pivot: pivot,
+                    r1: 2 * pivot - week.low,
+                    s1: 2 * pivot - week.high,
+                    r2: pivot + (week.high - week.low),
+                    s2: pivot - (week.high - week.low),
+                    r3: week.high + 2 * (pivot - week.low),
+                    s3: week.low - 2 * (week.high - pivot),
+                    r4: null, // Will calculate after r3
+                    s4: null, // Will calculate after s3
+                    r5: null, // Will calculate after r4
+                    s5: null  // Will calculate after s4
+                };
+            }).map(week => {
+                // Calculate R4, S4, R5, S5
+                week.r4 = week.r3 + (week.r2 - week.r1);
+                week.s4 = week.s3 - (week.s1 - week.s2);
+                week.r5 = week.r4 + (week.r3 - week.r2);
+                week.s5 = week.s4 - (week.s2 - week.s3);
+                return week;
+            });
+        }
+
+        // Main function to load and process data
+        async function loadData() {
+            const loadingDiv = document.getElementById('loading');
+            const errorDiv = document.getElementById('error');
+            const chartDiv = document.getElementById('chart');
+            
+            loadingDiv.style.display = 'block';
+            errorDiv.style.display = 'none';
+            chartDiv.innerHTML = '';
+
+            try {
+                // Fetch USD/IRR data
+                const usdIrrRawData = await fetchData(USD_IRR_ENDPOINT);
+                
+                // Process data
+                const usdIrrData = processData(usdIrrRawData);
+                const weeklyPivots = calculateWeeklyPivots(usdIrrData);
+
+                // Create the plot
+                createPlot(usdIrrData, weeklyPivots);
+                
+                loadingDiv.style.display = 'none';
+            } catch (error) {
+                loadingDiv.style.display = 'none';
+                errorDiv.style.display = 'block';
+                errorDiv.innerHTML = `Error loading data: ${error.message}<br>Please check your internet connection and try again.`;
+            }
+        }
+
+        // Create the Plotly chart
+        function createPlot(data, weeklyPivots) {
+            const traces = [];
+            
+            // Add main price line
+            traces.push({
+                x: data.map(d => d.date),
+                y: data.map(d => d.close),
+                mode: 'lines',
+                name: 'USD/IRR',
+                line: { color: colors.price, width: 2 },
+                type: 'scatter',
+                hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>Price: %{y:,.0f} IRR<extra></extra>'
+            });
+
+            // Add pivot lines for each week (skip first week)
+            weeklyPivots.forEach((week, index) => {
+                if (index === 0) return; // Skip first week as in original code
+                
+                const nextWeek = index < weeklyPivots.length - 1 ? 
+                    weeklyPivots[index + 1].weekStart : 
+                    new Date(Math.max(...data.map(d => d.date.getTime())) + 24 * 60 * 60 * 1000);
+                
+                const xRange = [week.weekStart, nextWeek];
+                const showLegend = index === 1; // Show legend only for first displayed week
+                
+                // Pivot line
+                traces.push({
+                    x: xRange,
+                    y: [week.pivot, week.pivot],
+                    mode: 'lines',
+                    line: { color: colors.pivot, width: 1.5, dash: 'dash' },
+                    name: 'Pivot',
+                    showlegend: showLegend,
+                    hovertemplate: '<b>Pivot</b><br>%{y:,.0f} IRR<extra></extra>'
+                });
+                
+                // Resistance lines
+                ['r1', 'r2', 'r3', 'r4', 'r5'].forEach(level => {
+                    traces.push({
+                        x: xRange,
+                        y: [week[level], week[level]],
+                        mode: 'lines',
+                        line: { color: colors.resistance, width: 1, dash: 'dot' },
+                        name: level.toUpperCase(),
+                        showlegend: showLegend && level === 'r1',
+                        hovertemplate: `<b>${level.toUpperCase()}</b><br>%{y:,.0f} IRR<extra></extra>`
+                    });
+                });
+                
+                // Support lines
+                ['s1', 's2', 's3', 's4', 's5'].forEach(level => {
+                    traces.push({
+                        x: xRange,
+                        y: [week[level], week[level]],
+                        mode: 'lines',
+                        line: { color: colors.support, width: 1, dash: 'dot' },
+                        name: level.toUpperCase(),
+                        showlegend: showLegend && level === 's1',
+                        hovertemplate: `<b>${level.toUpperCase()}</b><br>%{y:,.0f} IRR<extra></extra>`
+                    });
+                });
+            });
+
+            // Add annotations for the last week's levels
+            const annotations = [];
+            if (weeklyPivots.length > 0) {
+                const lastWeek = weeklyPivots[weeklyPivots.length - 1];
+                const lastDate = new Date(Math.max(...data.map(d => d.date.getTime())));
+                
+                const levels = [
+                    { key: 'pivot', label: 'P', color: colors.pivot },
+                    { key: 'r1', label: 'R1', color: colors.resistance },
+                    { key: 'r2', label: 'R2', color: colors.resistance },
+                    { key: 'r3', label: 'R3', color: colors.resistance },
+                    { key: 'r4', label: 'R4', color: colors.resistance },
+                    { key: 'r5', label: 'R5', color: colors.resistance },
+                    { key: 's1', label: 'S1', color: colors.support },
+                    { key: 's2', label: 'S2', color: colors.support },
+                    { key: 's3', label: 'S3', color: colors.support },
+                    { key: 's4', label: 'S4', color: colors.support },
+                    { key: 's5', label: 'S5', color: colors.support }
+                ];
+                
+                levels.forEach(level => {
+                    annotations.push({
+                        x: lastDate,
+                        y: lastWeek[level.key],
+                        text: `  ${level.label}: ${Math.round(lastWeek[level.key]).toLocaleString()}`,
+                        showarrow: false,
+                        xanchor: 'left',
+                        font: { color: level.color, size: 10 },
+                        xshift: 15
+                    });
+                });
+            }
+
+            const layout = {
+                title: {
+                    text: 'USD/IRR with Weekly Pivot Points<br><sub>Data from TGJU | Analysis by t.me/EcoAlgorithm</sub>',
+                    font: { size: 20, color: colors.text },
+                    x: 0.5
+                },
+                xaxis: {
+                    title: 'Date',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12, color: colors.text },
+                    titlefont: { size: 14, color: colors.text },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                yaxis: {
+                    title: 'Price (IRR)',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12, color: colors.text },
+                    titlefont: { size: 14, color: colors.text },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: ',.0f'
+                },
+                template: 'plotly_dark',
+                hovermode: 'x unified',
+                paper_bgcolor: colors.background,
+                plot_bgcolor: colors.background,
+                font: { family: 'Arial, sans-serif', size: 13, color: colors.text },
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: 1.02,
+                    xanchor: 'right',
+                    x: 1,
+                    bgcolor: 'rgba(19, 23, 34, 0.5)',
+                    bordercolor: 'rgba(255, 255, 255, 0.2)',
+                    borderwidth: 1,
+                    font: { size: 12, color: colors.text }
+                },
+                annotations: annotations,
+                margin: { l: 80, r: 100, t: 80, b: 60 }
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+                displaylogo: false
+            };
+
+            Plotly.newPlot('chart', traces, layout, config);
+        }
+
+        // Load data when page loads
+        window.addEventListener('load', loadData);
+    </script>
+</body>
+</html>
