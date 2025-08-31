@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GERAM18 vs Silver Analysis</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background-color: #131722;
+            font-family: Arial, sans-serif;
+            color: #F8F9FA;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .loading {
+            text-align: center;
+            padding: 50px;
+            font-size: 18px;
+        }
+        .error {
+            color: #E74C3C;
+            text-align: center;
+            padding: 50px;
+            font-size: 16px;
+        }
+        .refresh-btn {
+            background-color: #3498DB;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 20px auto;
+            display: block;
+        }
+        .refresh-btn:hover {
+            background-color: #2980B9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <button class="refresh-btn" onclick="loadData()">Refresh Data</button>
+        <div id="loading" class="loading">Loading data...</div>
+        <div id="error" class="error" style="display: none;"></div>
+        <div id="chart"></div>
+    </div>
+
+    <script>
+        // API endpoints
+        const GERAM18_ENDPOINT = "https://api.tgju.org/v1/market/indicator/summary-table-data/geram18";
+        const SILVER_ENDPOINT = "https://api.tgju.org/v1/market/indicator/summary-table-data/silver_999";
+        
+        // Color palette
+        const colors = {
+            geram: '#F7931A',
+            silver: '#C0C0C0',
+            ratio: '#3498DB',
+            mean: '#FFFFFF',
+            upper: '#E74C3C',
+            lower: '#2ECC71',
+            background: '#131722',
+            grid: '#1c2030',
+            text: '#F8F9FA'
+        };
+
+        // Utility functions
+        function parseDate(dateStr) {
+            return new Date(dateStr);
+        }
+
+        function parseNumber(str) {
+            return parseFloat(str.replace(/,/g, ''));
+        }
+
+        function calculateReturns(prices) {
+            const returns = [0]; // First return is 0
+            for (let i = 1; i < prices.length; i++) {
+                returns.push((prices[i] - prices[i-1]) / prices[i-1]);
+            }
+            return returns;
+        }
+
+        function calculateCumulativeReturns(returns) {
+            let cumulative = 1;
+            const cumulativeReturns = [];
+            for (let i = 0; i < returns.length; i++) {
+                cumulative *= (1 + returns[i]);
+                cumulativeReturns.push((cumulative - 1) * 100);
+            }
+            return cumulativeReturns;
+        }
+
+        function calculateRollingMean(data, window) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < window - 1) {
+                    result.push(null);
+                } else {
+                    const slice = data.slice(i - window + 1, i + 1);
+                    const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
+                    result.push(mean);
+                }
+            }
+            return result;
+        }
+
+        function calculateRollingStd(data, window) {
+            const result = [];
+            for (let i = 0; i < data.length; i++) {
+                if (i < window - 1) {
+                    result.push(null);
+                } else {
+                    const slice = data.slice(i - window + 1, i + 1);
+                    const mean = slice.reduce((a, b) => a + b, 0) / slice.length;
+                    const variance = slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / slice.length;
+                    result.push(Math.sqrt(variance));
+                }
+            }
+            return result;
+        }
+
+        function calculateZScore(data, window) {
+            const means = calculateRollingMean(data, window);
+            const stds = calculateRollingStd(data, window);
+            const zScores = [];
+            for (let i = 0; i < data.length; i++) {
+                if (means[i] === null || stds[i] === null || stds[i] === 0) {
+                    zScores.push(null);
+                } else {
+                    zScores.push((data[i] - means[i]) / stds[i]);
+                }
+            }
+            return zScores;
+        }
+
+        // Fetch data from API
+        async function fetchData(endpoint) {
+            try {
+                const response = await fetch(endpoint);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                return data.data;
+            } catch (error) {
+                console.error('Error fetching data:', error);
+                throw error;
+            }
+        }
+
+        // Process raw data
+        function processData(rawData) {
+            return rawData.map(row => ({
+                open: parseNumber(row[0]),
+                low: parseNumber(row[1]),
+                high: parseNumber(row[2]),
+                close: parseNumber(row[3]),
+                change: parseNumber(row[4]),
+                changePercentage: parseNumber(row[5]),
+                date: parseDate(row[6]),
+                lastUpdate: row[7]
+            })).filter(row => row.date > new Date('2020-10-31')).sort((a, b) => a.date - b.date);
+        }
+
+        // Fix mis-pricing
+        function fixMispricing(data) {
+            const dateMap = new Map();
+            data.forEach((item, index) => {
+                dateMap.set(item.date.toDateString(), index);
+            });
+
+            // Fix specific dates for silver
+            const fixDates = [
+                { date: '2021-08-10', prev: '2021-08-09', next: '2021-08-11' },
+                { date: '2021-08-29', prev: '2021-08-28', next: '2021-08-30' },
+                { date: '2022-09-30', prev: '2022-09-29', next: '2022-10-01' }
+            ];
+
+            fixDates.forEach(fix => {
+                const targetIdx = dateMap.get(new Date(fix.date).toDateString());
+                const prevIdx = dateMap.get(new Date(fix.prev).toDateString());
+                const nextIdx = dateMap.get(new Date(fix.next).toDateString());
+                
+                if (targetIdx !== undefined && prevIdx !== undefined && nextIdx !== undefined) {
+                    data[targetIdx].close = (data[prevIdx].close + data[nextIdx].close) / 2;
+                }
+            });
+
+            return data;
+        }
+
+        // Main function to load and process data
+        async function loadData() {
+            const loadingDiv = document.getElementById('loading');
+            const errorDiv = document.getElementById('error');
+            const chartDiv = document.getElementById('chart');
+            
+            loadingDiv.style.display = 'block';
+            errorDiv.style.display = 'none';
+            chartDiv.innerHTML = '';
+
+            try {
+                // Fetch data for both assets
+                const [geramRawData, silverRawData] = await Promise.all([
+                    fetchData(GERAM18_ENDPOINT),
+                    fetchData(SILVER_ENDPOINT)
+                ]);
+
+                // Process data
+                let geramData = processData(geramRawData);
+                let silverData = fixMispricing(processData(silverRawData));
+
+                // Align dates and forward fill
+                const allDates = new Set();
+                geramData.forEach(item => allDates.add(item.date.getTime()));
+                silverData.forEach(item => allDates.add(item.date.getTime()));
+                const sortedDates = Array.from(allDates).sort().map(time => new Date(time));
+
+                // Create aligned data arrays
+                const dates = [];
+                const geramPrices = [];
+                const silverPrices = [];
+
+                let geramIdx = 0;
+                let silverIdx = 0;
+                let lastGeramPrice = null;
+                let lastSilverPrice = null;
+
+                for (const date of sortedDates) {
+                    dates.push(date);
+                    
+                    // Find GERAM18 price for this date
+                    while (geramIdx < geramData.length && geramData[geramIdx].date.getTime() < date.getTime()) {
+                        lastGeramPrice = geramData[geramIdx].close;
+                        geramIdx++;
+                    }
+                    if (geramIdx < geramData.length && geramData[geramIdx].date.getTime() === date.getTime()) {
+                        lastGeramPrice = geramData[geramIdx].close;
+                        geramIdx++;
+                    }
+                    geramPrices.push(lastGeramPrice);
+
+                    // Find Silver price for this date
+                    while (silverIdx < silverData.length && silverData[silverIdx].date.getTime() < date.getTime()) {
+                        lastSilverPrice = silverData[silverIdx].close;
+                        silverIdx++;
+                    }
+                    if (silverIdx < silverData.length && silverData[silverIdx].date.getTime() === date.getTime()) {
+                        lastSilverPrice = silverData[silverIdx].close;
+                        silverIdx++;
+                    }
+                    silverPrices.push(lastSilverPrice);
+                }
+
+                // Filter out null values
+                const validIndices = [];
+                for (let i = 0; i < dates.length; i++) {
+                    if (geramPrices[i] !== null && silverPrices[i] !== null) {
+                        validIndices.push(i);
+                    }
+                }
+
+                const validDates = validIndices.map(i => dates[i]);
+                const validGeramPrices = validIndices.map(i => geramPrices[i]);
+                const validSilverPrices = validIndices.map(i => silverPrices[i]);
+
+                // Calculate returns and cumulative returns
+                const geramReturns = calculateReturns(validGeramPrices);
+                const silverReturns = calculateReturns(validSilverPrices);
+                const geramCumulative = calculateCumulativeReturns(geramReturns);
+                const silverCumulative = calculateCumulativeReturns(silverReturns);
+
+                // Calculate ratio
+                const ratio = validGeramPrices.map((geram, i) => geram / validSilverPrices[i]);
+                const meanRatio = ratio.reduce((a, b) => a + b, 0) / ratio.length;
+                const stdRatio = Math.sqrt(ratio.reduce((a, b) => a + Math.pow(b - meanRatio, 2), 0) / ratio.length);
+
+                // Calculate Z-scores
+                const window = 252;
+                const geramZScore = calculateZScore(validGeramPrices, window);
+                const silverZScore = calculateZScore(validSilverPrices, window);
+
+                // Create the plot
+                createPlot(validDates, geramCumulative, silverCumulative, ratio, meanRatio, stdRatio, geramZScore, silverZScore);
+                
+                loadingDiv.style.display = 'none';
+            } catch (error) {
+                loadingDiv.style.display = 'none';
+                errorDiv.style.display = 'block';
+                errorDiv.innerHTML = `Error loading data: ${error.message}<br>Please check your internet connection and try again.`;
+            }
+        }
+
+        // Create the Plotly chart
+        function createPlot(dates, geramCumulative, silverCumulative, ratio, meanRatio, stdRatio, geramZScore, silverZScore) {
+            const traces = [
+                // Cumulative returns
+                {
+                    x: dates,
+                    y: geramCumulative,
+                    name: 'GERAM18',
+                    line: { color: colors.geram, width: 3 },
+                    type: 'scatter',
+                    xaxis: 'x',
+                    yaxis: 'y',
+                    hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>%{y:.2f}%<extra></extra>'
+                },
+                {
+                    x: dates,
+                    y: silverCumulative,
+                    name: 'Silver',
+                    line: { color: colors.silver, width: 3 },
+                    type: 'scatter',
+                    xaxis: 'x',
+                    yaxis: 'y',
+                    hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>%{y:.2f}%<extra></extra>'
+                },
+                // Ratio
+                {
+                    x: dates,
+                    y: ratio,
+                    name: 'GERAM18/Silver Ratio',
+                    line: { color: colors.ratio, width: 3 },
+                    type: 'scatter',
+                    xaxis: 'x2',
+                    yaxis: 'y2',
+                    hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>Ratio: %{y:.2f}<extra></extra>'
+                },
+                // GERAM18 Z-Score
+                {
+                    x: dates,
+                    y: geramZScore,
+                    name: 'GERAM18 Z-Score',
+                    line: { color: colors.geram, width: 3 },
+                    type: 'scatter',
+                    xaxis: 'x3',
+                    yaxis: 'y3',
+                    hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>GERAM18 Z-Score: %{y:.2f}<extra></extra>'
+                },
+                // Silver Z-Score
+                {
+                    x: dates,
+                    y: silverZScore,
+                    name: 'Silver Z-Score',
+                    line: { color: colors.silver, width: 3 },
+                    type: 'scatter',
+                    xaxis: 'x4',
+                    yaxis: 'y4',
+                    hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>Silver Z-Score: %{y:.2f}<extra></extra>'
+                }
+            ];
+
+            const layout = {
+                template: 'plotly_dark',
+                height: 1400,
+                width: 1200,
+                showlegend: true,
+                hovermode: 'x unified',
+                paper_bgcolor: colors.background,
+                plot_bgcolor: colors.background,
+                font: { family: 'Arial, sans-serif', size: 13, color: colors.text },
+                title: {
+                    text: '<b>GERAM18 vs Silver Analysis</b>',
+                    font: { size: 26, color: colors.text },
+                    x: 0.5,
+                    y: 0.98
+                },
+                margin: { l: 60, r: 40, t: 120, b: 60 },
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: 1.02,
+                    xanchor: 'right',
+                    x: 1,
+                    bgcolor: 'rgba(19, 23, 34, 0.5)',
+                    bordercolor: 'rgba(255, 255, 255, 0.2)',
+                    borderwidth: 1,
+                    font: { size: 12, color: colors.text }
+                },
+                annotations: [
+                    {
+                        text: '@EcoAlgorithm',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.01,
+                        y: 1.05,
+                        showarrow: false,
+                        font: { size: 12, color: '#888888' },
+                        align: 'left'
+                    },
+                    {
+                        text: 'Data Source: TGJU',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: -0.08,
+                        showarrow: false,
+                        font: { size: 10, color: '#888888' }
+                    },
+                    {
+                        text: '<b>Cumulative Returns: GERAM18 vs Silver</b>',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: 0.88,
+                        showarrow: false,
+                        font: { size: 16, color: colors.text }
+                    },
+                    {
+                        text: '<b>GERAM18/Silver Ratio Over Time</b>',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: 0.65,
+                        showarrow: false,
+                        font: { size: 16, color: colors.text }
+                    },
+                    {
+                        text: '<b>GERAM18 Price Z-Score</b>',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: 0.42,
+                        showarrow: false,
+                        font: { size: 16, color: colors.text }
+                    },
+                    {
+                        text: '<b>Silver Price Z-Score</b>',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: 0.19,
+                        showarrow: false,
+                        font: { size: 16, color: colors.text }
+                    }
+                ],
+                // Subplot configuration
+                grid: { rows: 4, columns: 1, pattern: 'independent', roworder: 'top to bottom' },
+                xaxis: {
+                    domain: [0, 1],
+                    anchor: 'y',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                yaxis: {
+                    domain: [0.7, 1],
+                    anchor: 'x',
+                    title: { text: '<b>Cumulative Return (%)</b>', font: { size: 14 } },
+                    ticksuffix: '%',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    zeroline: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: '.1f'
+                },
+                xaxis2: {
+                    domain: [0, 1],
+                    anchor: 'y2',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                yaxis2: {
+                    domain: [0.475, 0.675],
+                    anchor: 'x2',
+                    title: { text: '<b>Ratio</b>', font: { size: 14 } },
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    zeroline: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: '.2f'
+                },
+                xaxis3: {
+                    domain: [0, 1],
+                    anchor: 'y3',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                yaxis3: {
+                    domain: [0.25, 0.45],
+                    anchor: 'x3',
+                    title: { text: '<b>Z-Score</b>', font: { size: 14 } },
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    zeroline: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: '.2f'
+                },
+                xaxis4: {
+                    domain: [0, 1],
+                    anchor: 'y4',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    rangeselector: {
+                        buttons: [
+                            { count: 1, label: '1M', step: 'month', stepmode: 'backward' },
+                            { count: 6, label: '6M', step: 'month', stepmode: 'backward' },
+                            { count: 1, label: 'YTD', step: 'year', stepmode: 'todate' },
+                            { count: 1, label: '1Y', step: 'year', stepmode: 'backward' },
+                            { step: 'all', label: 'ALL' }
+                        ],
+                        bgcolor: colors.background,
+                        activecolor: '#4051B5',
+                        font: { color: colors.text, size: 12 },
+                        bordercolor: 'rgba(255, 255, 255, 0.2)',
+                        borderwidth: 1,
+                        x: 0.01,
+                        y: 1.1
+                    },
+                    rangeslider: {
+                        visible: true,
+                        bgcolor: 'rgba(28, 32, 48, 0.8)',
+                        bordercolor: 'rgba(255, 255, 255, 0.1)',
+                        thickness: 0.06
+                    },
+                    type: 'date'
+                },
+                yaxis4: {
+                    domain: [0.025, 0.225],
+                    anchor: 'x4',
+                    title: { text: '<b>Z-Score</b>', font: { size: 14 } },
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    zeroline: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: '.2f'
+                },
+                shapes: [
+                    // Ratio mean line
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: meanRatio,
+                        y1: meanRatio,
+                        xref: 'x2',
+                        yref: 'y2',
+                        line: { color: colors.mean, width: 2, dash: 'dash' }
+                    },
+                    // Ratio +1σ line
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: meanRatio + stdRatio,
+                        y1: meanRatio + stdRatio,
+                        xref: 'x2',
+                        yref: 'y2',
+                        line: { color: colors.upper, width: 2, dash: 'dot' }
+                    },
+                    // Ratio -1σ line
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: meanRatio - stdRatio,
+                        y1: meanRatio - stdRatio,
+                        xref: 'x2',
+                        yref: 'y2',
+                        line: { color: colors.lower, width: 2, dash: 'dot' }
+                    },
+                    // GERAM18 Z-score reference lines
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 0,
+                        y1: 0,
+                        xref: 'x3',
+                        yref: 'y3',
+                        line: { color: colors.mean, width: 2, dash: 'dash' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 1,
+                        y1: 1,
+                        xref: 'x3',
+                        yref: 'y3',
+                        line: { color: colors.upper, width: 2, dash: 'dot' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: -1,
+                        y1: -1,
+                        xref: 'x3',
+                        yref: 'y3',
+                        line: { color: colors.lower, width: 2, dash: 'dot' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 2,
+                        y1: 2,
+                        xref: 'x3',
+                        yref: 'y3',
+                        line: { color: colors.upper, width: 1, dash: 'dot', opacity: 0.5 }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: -2,
+                        y1: -2,
+                        xref: 'x3',
+                        yref: 'y3',
+                        line: { color: colors.lower, width: 1, dash: 'dot', opacity: 0.5 }
+                    },
+                    // Silver Z-score reference lines
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 0,
+                        y1: 0,
+                        xref: 'x4',
+                        yref: 'y4',
+                        line: { color: colors.mean, width: 2, dash: 'dash' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 1,
+                        y1: 1,
+                        xref: 'x4',
+                        yref: 'y4',
+                        line: { color: colors.upper, width: 2, dash: 'dot' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: -1,
+                        y1: -1,
+                        xref: 'x4',
+                        yref: 'y4',
+                        line: { color: colors.lower, width: 2, dash: 'dot' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 2,
+                        y1: 2,
+                        xref: 'x4',
+                        yref: 'y4',
+                        line: { color: colors.upper, width: 1, dash: 'dot', opacity: 0.5 }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: -2,
+                        y1: -2,
+                        xref: 'x4',
+                        yref: 'y4',
+                        line: { color: colors.lower, width: 1, dash: 'dot', opacity: 0.5 }
+                    }
+                ]
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+                displaylogo: false
+            };
+
+            Plotly.newPlot('chart', traces, layout, config);
+        }
+
+        // Load data when page loads
+        window.addEventListener('load', loadData);
+    </script>
+</body>
+</html>
