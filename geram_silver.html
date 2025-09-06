@@ -286,9 +286,10 @@
                 const window = 252;
                 const geramZScore = calculateZScore(validGeramPrices, window);
                 const silverZScore = calculateZScore(validSilverPrices, window);
+                const ratioZScore = calculateZScore(ratio, window);
 
                 // Create the plot
-                createPlot(validDates, geramCumulative, silverCumulative, ratio, meanRatio, stdRatio, geramZScore, silverZScore);
+                createPlot(validDates, geramCumulative, silverCumulative, ratio, meanRatio, stdRatio, geramZScore, silverZScore, ratioZScore);
                 
                 loadingDiv.style.display = 'none';
             } catch (error) {
@@ -299,7 +300,7 @@
         }
 
         // Create the Plotly chart
-        function createPlot(dates, geramCumulative, silverCumulative, ratio, meanRatio, stdRatio, geramZScore, silverZScore) {
+        function createPlot(dates, geramCumulative, silverCumulative, ratio, meanRatio, stdRatio, geramZScore, silverZScore, ratioZScore) {
             const traces = [
                 // Cumulative returns
                 {
@@ -354,12 +355,23 @@
                     xaxis: 'x4',
                     yaxis: 'y4',
                     hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>Silver Z-Score: %{y:.2f}<extra></extra>'
+                },
+                // Ratio Z-Score
+                {
+                    x: dates,
+                    y: ratioZScore,
+                    name: 'Ratio Z-Score',
+                    line: { color: colors.ratio, width: 3 },
+                    type: 'scatter',
+                    xaxis: 'x5',
+                    yaxis: 'y5',
+                    hovertemplate: '<b>%{x|%Y-%m-%d}</b><br>Ratio Z-Score: %{y:.2f}<extra></extra>'
                 }
             ];
 
             const layout = {
                 template: 'plotly_dark',
-                height: 1400,
+                height: 1700,
                 width: 1200,
                 showlegend: true,
                 hovermode: 'x unified',
@@ -427,7 +439,7 @@
                         xref: 'paper',
                         yref: 'paper',
                         x: 0.5,
-                        y: 0.42,
+                        y: 0.55,
                         showarrow: false,
                         font: { size: 16, color: colors.text }
                     },
@@ -436,13 +448,22 @@
                         xref: 'paper',
                         yref: 'paper',
                         x: 0.5,
-                        y: 0.19,
+                        y: 0.35,
+                        showarrow: false,
+                        font: { size: 16, color: colors.text }
+                    },
+                    {
+                        text: '<b>Ratio Z-Score</b>',
+                        xref: 'paper',
+                        yref: 'paper',
+                        x: 0.5,
+                        y: 0.15,
                         showarrow: false,
                         font: { size: 16, color: colors.text }
                     }
                 ],
                 // Subplot configuration
-                grid: { rows: 4, columns: 1, pattern: 'independent', roworder: 'top to bottom' },
+                grid: { rows: 5, columns: 1, pattern: 'independent', roworder: 'top to bottom' },
                 xaxis: {
                     domain: [0, 1],
                     anchor: 'y',
@@ -454,7 +475,7 @@
                     linecolor: 'rgba(255, 255, 255, 0.2)'
                 },
                 yaxis: {
-                    domain: [0.7, 1],
+                    domain: [0.8, 1],
                     anchor: 'x',
                     title: { text: '<b>Cumulative Return (%)</b>', font: { size: 14 } },
                     ticksuffix: '%',
@@ -478,7 +499,7 @@
                     linecolor: 'rgba(255, 255, 255, 0.2)'
                 },
                 yaxis2: {
-                    domain: [0.475, 0.675],
+                    domain: [0.6, 0.78],
                     anchor: 'x2',
                     title: { text: '<b>Ratio</b>', font: { size: 14 } },
                     gridcolor: colors.grid,
@@ -490,32 +511,9 @@
                     linecolor: 'rgba(255, 255, 255, 0.2)',
                     tickformat: '.2f'
                 },
-                xaxis3: {
+                xaxis5: {
                     domain: [0, 1],
-                    anchor: 'y3',
-                    gridcolor: colors.grid,
-                    zerolinecolor: colors.grid,
-                    tickfont: { size: 12 },
-                    showgrid: true,
-                    showline: true,
-                    linecolor: 'rgba(255, 255, 255, 0.2)'
-                },
-                yaxis3: {
-                    domain: [0.25, 0.45],
-                    anchor: 'x3',
-                    title: { text: '<b>Z-Score</b>', font: { size: 14 } },
-                    gridcolor: colors.grid,
-                    zerolinecolor: colors.grid,
-                    tickfont: { size: 12 },
-                    showgrid: true,
-                    zeroline: true,
-                    showline: true,
-                    linecolor: 'rgba(255, 255, 255, 0.2)',
-                    tickformat: '.2f'
-                },
-                xaxis4: {
-                    domain: [0, 1],
-                    anchor: 'y4',
+                    anchor: 'y5',
                     gridcolor: colors.grid,
                     zerolinecolor: colors.grid,
                     tickfont: { size: 12 },
@@ -546,8 +544,54 @@
                     },
                     type: 'date'
                 },
+                yaxis5: {
+                    domain: [0.025, 0.18],
+                    anchor: 'x5',
+                    title: { text: '<b>Z-Score</b>', font: { size: 14 } },
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    zeroline: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: '.2f'
+                },
+                xaxis3: {
+                    domain: [0, 1],
+                    anchor: 'y3',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                yaxis3: {
+                    domain: [0.4, 0.58],
+                    anchor: 'x3',
+                    title: { text: '<b>Z-Score</b>', font: { size: 14 } },
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    zeroline: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)',
+                    tickformat: '.2f'
+                },
+                xaxis4: {
+                    domain: [0, 1],
+                    anchor: 'y4',
+                    gridcolor: colors.grid,
+                    zerolinecolor: colors.grid,
+                    tickfont: { size: 12 },
+                    showgrid: true,
+                    showline: true,
+                    linecolor: 'rgba(255, 255, 255, 0.2)'
+                },
                 yaxis4: {
-                    domain: [0.025, 0.225],
+                    domain: [0.2, 0.38],
                     anchor: 'x4',
                     title: { text: '<b>Z-Score</b>', font: { size: 14 } },
                     gridcolor: colors.grid,
@@ -693,6 +737,57 @@
                         y1: -2,
                         xref: 'x4',
                         yref: 'y4',
+                        line: { color: colors.lower, width: 1, dash: 'dot', opacity: 0.5 }
+                    },
+                    // Ratio Z-score reference lines
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 0,
+                        y1: 0,
+                        xref: 'x5',
+                        yref: 'y5',
+                        line: { color: colors.mean, width: 2, dash: 'dash' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 1,
+                        y1: 1,
+                        xref: 'x5',
+                        yref: 'y5',
+                        line: { color: colors.upper, width: 2, dash: 'dot' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: -1,
+                        y1: -1,
+                        xref: 'x5',
+                        yref: 'y5',
+                        line: { color: colors.lower, width: 2, dash: 'dot' }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: 2,
+                        y1: 2,
+                        xref: 'x5',
+                        yref: 'y5',
+                        line: { color: colors.upper, width: 1, dash: 'dot', opacity: 0.5 }
+                    },
+                    {
+                        type: 'line',
+                        x0: dates[0],
+                        x1: dates[dates.length - 1],
+                        y0: -2,
+                        y1: -2,
+                        xref: 'x5',
+                        yref: 'y5',
                         line: { color: colors.lower, width: 1, dash: 'dot', opacity: 0.5 }
                     }
                 ]
